@@ -131,12 +131,18 @@ public class DoraRunnerController : MonoBehaviour
 
     void UpdateSlide()
     {
-        if (State == RunState.Sliding && Time.time >= slideEndsAt) EndSlide();
+        if (State == RunState.Sliding && Time.time >= slideEndsAt && !HeadBlocked()) EndSlide();
+    }
+
+    // Stay low while a barrier is still overhead
+    bool HeadBlocked()
+    {
+        Vector3 origin = transform.position + Vector3.up * slideHeight;
+        return Physics.Raycast(origin, Vector3.up, originalHeight - slideHeight, ~0, QueryTriggerInteraction.Ignore);
     }
 
     void EndSlide()
     {
-        // TODO: raycast upward to stay low if a barrier is still overhead.
         cc.height = originalHeight;
         cc.center = originalCenter;
         State = RunState.Running;
