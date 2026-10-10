@@ -9,14 +9,17 @@ Controls
     A / D  or  Left / Right   change lane
     W / Up / Space            jump (over gaps and crates)
     S / Down                  slide (under barriers); in mid-air = fast-fall
-    P pause    Esc back / quit
+    P pause    F11 / Alt+Enter fullscreen    Esc back / quit
 
 Everything is drawn with code (no image or sound files). The 3D look is a
 pseudo-3D perspective projection, so it runs on any PC.
 """
 import array
 import math
+import os
 import random
+import shutil
+import subprocess
 import sys
 
 import pygame
@@ -265,6 +268,32 @@ def make_dora_frame(phase=0.0, pose="run"):
     return surf.convert_alpha()
 
 
+def speak(text):
+    """Say text out loud using the operating system's built-in voice (no extra installs)."""
+    try:
+        if sys.platform.startswith("win"):
+            cmd = ["powershell", "-NoProfile", "-Command",
+                   "Add-Type -AssemblyName System.Speech; "
+                   "$s = New-Object System.Speech.Synthesis.SpeechSynthesizer; $s.Rate = 1; $s.Speak('%s')" % text.replace("'", "''")]
+            flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+            subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, creationflags=flags)
+        elif sys.platform == "darwin":
+            subprocess.Popen(["say", text], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        else:
+            for exe in ("spd-say", "espeak-ng", "espeak", "festival"):
+                path = shutil.which(exe)
+                if path:
+                    if exe == "festival":
+                        proc = subprocess.Popen([path, "--tts"], stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                        proc.stdin.write(text.encode())
+                        proc.stdin.close()
+                    else:
+                        subprocess.Popen([path, text], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                    break
+    except Exception:
+        pass
+
+
 def make_tone(freq, dur, vol=0.25, sweep=0.0):
     rate = 22050
     n = int(rate * dur)
@@ -281,7 +310,8 @@ class Game:
         pygame.mixer.pre_init(22050, -16, 1, 512)
         pygame.init()
         pygame.display.set_caption("Dora Dash!")
-        self.screen = pygame.display.set_mode((W, H))
+        self.fullscreen = os.environ.get("DORA_WINDOWED") != "1"
+        self.set_display()
         self.clock = pygame.time.Clock()
         self.f_big = pygame.font.SysFont("arialblack,comicsansms,arial", 56)
         self.f_mid = pygame.font.SysFont("arialblack,comicsansms,arial", 28)
@@ -304,6 +334,14 @@ class Game:
         self.focal = 500.0
         self.seen_hints = set()
         self.start_level(0, menu=True)
+
+    def set_display(self):
+        # Logical size stays 960x540; SCALED stretches it to the monitor (keeps aspect ratio).
+        flags = pygame.SCALED | (pygame.FULLSCREEN if self.fullscreen else 0)
+        try:
+            self.screen = pygame.display.set_mode((W, H), flags)
+        except pygame.error:
+            self.screen = pygame.display.set_mode((W, H))
 
     # ---------------- setup ----------------
     def _make_sky(self, th):
@@ -361,6 +399,10 @@ class Game:
         if e.type != pygame.KEYDOWN:
             return True
         k = e.key
+        if k == pygame.K_F11 or (k == pygame.K_RETURN and e.mod & pygame.KMOD_ALT):
+            self.fullscreen = not self.fullscreen
+            self.set_display()
+            return True
         if self.state == "menu":
             if k == pygame.K_ESCAPE:
                 return False
@@ -690,6 +732,8 @@ class Game:
             self.spin = 0
             self.state = "result"
             self.result_t = 0.0
+            self.say("I'm Dora the Explorer!", 4.0)
+            speak("I'm Dora the Explorer!")
             for _ in range(160):
                 self.confetti.append([random.uniform(0, W), random.uniform(-200, 0), random.uniform(-60, 60),
                                       random.uniform(60, 200), random.choice([(255, 90, 150), (255, 210, 50), (90, 200, 255), (130, 230, 120), (190, 120, 255)]),
@@ -1199,6 +1243,7 @@ class Game:
         ov.fill((0, 0, 0, 150))
         self.screen.blit(ov, (0, 250))
         self.center_text("LEVEL COMPLETE!", self.f_big, 258, (255, 230, 90))
+        self.center_text("\"I'm Dora the Explorer!\"", self.f_mid, 215, (255, 255, 255))
         for i in range(3):
             x = W / 2 + (i - 1) * 80
             on = i < self.rating
@@ -1245,7 +1290,7 @@ class Game:
             self.text(L["blurb"], self.f_small, (200, 220, 255), (W / 2 - 310, y + 40))
             self.text("*" * best + "-" * (3 - best), self.f_mid, (255, 215, 40), (W / 2 + 230, y + 12))
         self.center_text("Press 1, 2 or 3 to play", self.f_mid, 405, (255, 255, 160))
-        self.center_text("A/D lanes   W/Space jump   S slide   P pause   Esc back", self.f_small, 460)
+        self.center_text("A/D lanes   W/Space jump   S slide   P pause   F11 fullscreen   Esc back", self.f_small, 460)
         self.center_text("Fan prototype - Dora the Explorer(c) Nickelodeon", self.f_small, 495, (180, 180, 200))
 
 
