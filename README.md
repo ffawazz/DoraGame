@@ -12,6 +12,8 @@ python dora_dash.py
 Controls: **A/D** or **←/→** lanes · **W/↑/Space** jump · **S/↓** slide · **P** pause · **Esc** back · **F11** toggle fullscreen (starts fullscreen; set `DORA_WINDOWED=1` to start windowed).
 At the end of a level Dora says "I'm Dora the Explorer!" out loud using your OS voice.
 
+Each screen has its own looping adventure music (synthesised in code; **M** toggles it, and it dips when you crash or pause).
+
 Three levels (press 1, 2 or 3): Spooky Forest, Chaotic Highway, Crocodile Lake.
 Reach the Banana Swing at the end of each one. Graphics and sound are generated in code, so no asset files are needed.
 

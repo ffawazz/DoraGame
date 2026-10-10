@@ -9,7 +9,7 @@ Controls
     A / D  or  Left / Right   change lane
     W / Up / Space            jump (over gaps and crates)
     S / Down                  slide (under barriers); in mid-air = fast-fall
-    P pause    F11 / Alt+Enter fullscreen    Esc back / quit
+    P pause    M music on/off    F11 / Alt+Enter fullscreen    Esc back / quit
 
 Everything is drawn with code (no image or sound files). The 3D look is a
 pseudo-3D perspective projection, so it runs on any PC.
@@ -21,6 +21,7 @@ import random
 import shutil
 import subprocess
 import sys
+import threading
 
 import pygame
 
@@ -294,6 +295,18 @@ def speak(text):
         pass
 
 
+def to_sound(buf):
+    """Turn an array('h') of mono samples into a pygame Sound that matches the mixer format."""
+    init = pygame.mixer.get_init()
+    if init and init[2] == 2:
+        dbl = array.array("h")
+        for v in buf:
+            dbl.append(v)
+            dbl.append(v)
+        buf = dbl
+    return pygame.mixer.Sound(buffer=buf.tobytes())
+
+
 def make_tone(freq, dur, vol=0.25, sweep=0.0):
     rate = 22050
     n = int(rate * dur)
@@ -302,7 +315,146 @@ def make_tone(freq, dur, vol=0.25, sweep=0.0):
         t = i / rate
         env = 1.0 - i / n
         buf.append(int(32767 * vol * env * math.sin(2 * math.pi * (freq + sweep * t) * t)))
-    return pygame.mixer.Sound(buffer=buf.tobytes())
+    return to_sound(buf)
+
+
+# ----------------------------------------------------------------------------------
+# Music: original upbeat chiptune adventure tunes, synthesised in code (no audio files).
+# Melody = 8 bars x 8 eighth-notes of scale degrees; None = rest, "-" = hold the note.
+# ----------------------------------------------------------------------------------
+SCALES = {"maj": [0, 2, 4, 5, 7, 9, 11], "min": [0, 2, 3, 5, 7, 8, 10]}
+
+TRACKS = {
+    "menu": dict(root=60, scale="maj", bpm=120, four=False, chords=[0, 0, 5, 4, 0, 3, 3, 4], melody=[
+        [4, "-", 4, 5, 7, "-", 7, 5], [4, "-", 2, "-", 0, "-", "-", None],
+        [2, "-", 2, 4, 5, "-", 5, 4], [2, "-", 0, "-", -1, "-", "-", None],
+        [4, "-", 4, 5, 7, "-", 9, 7], [8, "-", 7, "-", 5, "-", 4, "-"],
+        [5, "-", 4, 2, 4, "-", 2, 0], [1, "-", 2, "-", 0, "-", "-", None]]),
+    "l0": dict(root=62, scale="min", bpm=126, four=False, chords=[0, 0, 5, 6, 0, 3, 5, 4], melody=[
+        [0, None, 0, 2, 4, None, 2, None], [3, None, 2, None, 0, None, -1, None],
+        [0, None, 0, 2, 4, None, 5, 4], [3, "-", 2, "-", 1, "-", "-", None],
+        [4, None, 4, 5, 7, None, 5, 4], [3, None, 2, 3, 4, "-", "-", None],
+        [5, "-", 4, 2, 3, "-", 2, 1], [0, "-", "-", "-", None, None, 2, 4]]),
+    "l1": dict(root=60, scale="maj", bpm=148, four=True, chords=[0, 3, 0, 4, 0, 3, 5, 4], melody=[
+        [4, 5, 7, None, 7, 5, 4, 5], [7, "-", 9, "-", 7, "-", 5, 4],
+        [5, 5, 7, None, 7, 5, 4, 5], [4, "-", 2, "-", 0, "-", "-", None],
+        [4, 5, 7, None, 9, 7, 5, 7], [9, "-", 11, "-", 9, "-", 7, 5],
+        [7, "-", 5, 4, 5, "-", 4, 2], [0, "-", "-", "-", None, 4, 5, 7]]),
+    "l2": dict(root=67, scale="maj", bpm=138, four=True, chords=[0, 0, 3, 4, 0, 3, 4, 0], melody=[
+        [7, None, 5, 7, None, 5, 4, None], [2, None, 4, 5, 4, None, 2, None],
+        [7, None, 5, 7, None, 5, 4, None], [5, "-", 4, "-", 2, "-", "-", None],
+        [4, None, 4, 5, 7, None, 9, 7], [8, None, 7, 8, None, 7, 5, None],
+        [4, None, 5, 7, 5, None, 4, 2], [0, "-", "-", None, 0, 2, 4, 5]]),
+}
+
+
+def midi_hz(m):
+    return 440.0 * 2 ** ((m - 69) / 12.0)
+
+
+def degree(root, scale, d):
+    octv, i = divmod(d, 7)
+    return root + SCALES[scale][i] + 12 * octv
+
+
+def render_track(tr, rate=22050):
+    root, sc, four = tr["root"], tr["scale"], tr["four"]
+    spe = int(rate * 30 / tr["bpm"])  # samples per eighth note
+    n8 = 64
+    buf = [0.0] * (spe * n8)
+    rng = random.Random(7)
+    mel = [v for bar in tr["melody"] for v in bar]
+
+    def add(start, length, fn):
+        end = min(len(buf), start + length)
+        for k in range(end - start):
+            buf[start + k] += fn(k, length)
+
+    # lead (square wave)
+    i = 0
+    while i < n8:
+        v = mel[i]
+        if v is None or v == "-":
+            i += 1
+            continue
+        j = i + 1
+        while j < n8 and mel[j] == "-":
+            j += 1
+        f = midi_hz(degree(root + 12, sc, v)) / rate
+        add(i * spe, int((j - i) * spe * 0.93),
+            lambda k, L, f=f: 0.15 * (1 - k / L) ** 0.5 * min(1.0, k / 150) * (1.0 if (k * f) % 1 < 0.5 else -1.0))
+        i = j
+    for e in range(n8):
+        bar, pos = divmod(e, 8)
+        ch = tr["chords"][bar]
+        # arpeggio (thin pulse)
+        tones = [degree(root, sc, ch + o) for o in (0, 2, 4, 2)]
+        f = midi_hz(tones[pos % 4]) / rate
+        add(e * spe, int(spe * 0.75),
+            lambda k, L, f=f: 0.055 * (1 - k / L) * (1.0 if (k * f) % 1 < 0.25 else -1.0))
+        # bass (triangle)
+        if pos in (0, 2, 4, 6) and (pos != 2 or four or bar % 2):
+            note = degree(root - 12, sc, ch + (4 if pos == 4 else 0))
+            f = midi_hz(note) / rate
+            add(e * spe, int(spe * 0.9),
+                lambda k, L, f=f: 0.30 * (1 - k / L) ** 0.3 * (4 * abs((k * f) % 1 - 0.5) - 1))
+        # drums
+        if pos % 4 == 0 or (four and pos % 2 == 0):
+            n = int(rate * 0.13)
+            ph = [0.0]
+
+            def kick(k, L, ph=ph):
+                ph[0] += (140 - 95 * k / L) / rate
+                return 0.33 * (1 - k / L) ** 1.5 * math.sin(2 * math.pi * ph[0])
+            add(e * spe, n, kick)
+        if pos % 4 == 2:
+            add(e * spe, int(rate * 0.10), lambda k, L: 0.12 * (1 - k / L) ** 2 * rng.uniform(-1, 1))
+        if pos % 2 == 1:
+            add(e * spe, int(rate * 0.03), lambda k, L: 0.05 * (1 - k / L) * rng.uniform(-1, 1))
+    out = array.array("h", (int(math.tanh(x * 1.3) * 26000) for x in buf))
+    return out
+
+
+class Music:
+    """Looping background music. Tracks render in a background thread so the game starts instantly."""
+
+    def __init__(self):
+        self.ok = bool(pygame.mixer.get_init())
+        self.raw, self.sounds = {}, {}
+        self.want = self.cur = None
+        self.muted = False
+        self.vol = 0.5
+        self.duck = 1.0
+        self.chan = None
+        if self.ok:
+            pygame.mixer.set_num_channels(16)
+            pygame.mixer.set_reserved(1)
+            self.chan = pygame.mixer.Channel(0)
+            threading.Thread(target=self._worker, daemon=True).start()
+
+    def _worker(self):
+        order = ["menu", "l0", "l1", "l2"]
+        while True:
+            todo = [n for n in order if n not in self.raw]
+            if not todo:
+                return
+            n = self.want if self.want in todo else todo[0]
+            try:
+                self.raw[n] = render_track(TRACKS[n])
+            except Exception:
+                self.raw[n] = array.array("h", [0] * 1000)
+
+    def update(self, dt, duck_target=1.0):
+        if not self.ok:
+            return
+        for n, b in list(self.raw.items()):
+            if n not in self.sounds:
+                self.sounds[n] = to_sound(b)
+        if self.want and self.want != self.cur and self.want in self.sounds:
+            self.chan.play(self.sounds[self.want], loops=-1, fade_ms=500)
+            self.cur = self.want
+        self.duck += (duck_target - self.duck) * min(1.0, dt * 6)
+        self.chan.set_volume(0.0 if self.muted else self.vol * self.duck)
 
 
 class Game:
@@ -323,6 +475,7 @@ class Game:
                             slide=make_tone(300, 0.15, 0.2, sweep=-400), grr=make_tone(110, 0.35, 0.3, sweep=80))
         except Exception:
             pass
+        self.music = Music()
         self.skies = {n: self._make_sky(t) for n, t in THEMES.items()}
         self.frames = [make_dora_frame(i / 8 * 2 * math.pi) for i in range(8)]
         self.frame_jump = make_dora_frame(0, "jump")
@@ -358,6 +511,7 @@ class Game:
 
     def start_level(self, idx, menu=False):
         self.level = idx
+        self.music.want = "menu" if menu else "l%d" % idx
         self.L = LEVELS[idx]
         self.th = THEMES[self.L["theme"]]
         self.ents, self.gaps, self.finish_z = gen_level(idx, random.randrange(10 ** 6) if not menu else 1)
@@ -402,6 +556,9 @@ class Game:
         if k == pygame.K_F11 or (k == pygame.K_RETURN and e.mod & pygame.KMOD_ALT):
             self.fullscreen = not self.fullscreen
             self.set_display()
+            return True
+        if k == pygame.K_m:
+            self.music.muted = not self.music.muted
             return True
         if self.state == "menu":
             if k == pygame.K_ESCAPE:
@@ -486,6 +643,7 @@ class Game:
         return False
 
     def update(self, dt):
+        self.music.update(dt, {"dead": 0.35, "pause": 0.3}.get(self.state, 1.0))
         if self.state == "menu":
             self.menu_z += 14 * dt
             self.phase += dt * 16
@@ -1290,7 +1448,7 @@ class Game:
             self.text(L["blurb"], self.f_small, (200, 220, 255), (W / 2 - 310, y + 40))
             self.text("*" * best + "-" * (3 - best), self.f_mid, (255, 215, 40), (W / 2 + 230, y + 12))
         self.center_text("Press 1, 2 or 3 to play", self.f_mid, 405, (255, 255, 160))
-        self.center_text("A/D lanes   W/Space jump   S slide   P pause   F11 fullscreen   Esc back", self.f_small, 460)
+        self.center_text("A/D lanes   W/Space jump   S slide   P pause   M music   F11 fullscreen   Esc back", self.f_small, 460)
         self.center_text("Fan prototype - Dora the Explorer(c) Nickelodeon", self.f_small, 495, (180, 180, 200))
 
 
